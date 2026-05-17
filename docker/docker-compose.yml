@@ -1,1 +1,50 @@
-# TODO: реализовать
+name: devops-lab
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: devops-lab-service:1.2
+    container_name: devops-lab-app
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    networks:
+      - devops-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: devops-lab-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - app
+    restart: unless-stopped
+    networks:
+      - devops-net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: devops-lab-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - devops-net
+
+networks:
+  devops-net:
+
+volumes:
+  grafana-storage:
