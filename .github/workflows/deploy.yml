@@ -9,49 +9,74 @@ on:
 
 permissions:
   contents: read
-  packages: write
+  #packages: write
 
 env:
-  REGISTRY: ghcr.io
+  #REGISTRY: ghcr.io
   DEPLOY_HOST: 109.202.59.96
   DEPLOY_USER: alexware
   DEPLOY_PORT: 456
-  DEPLOY_PATH: ~/workspace/os-labs/lab4/devops-lab-service
+  DEPLOY_PATH: /home/alexware/workspace/os-labs/lab4/devops-lab-service
+  IMAGE_NAME: devops-lab-service-ci
 
 jobs:
-  build-and-deploy:
+  build-test-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare image name
-        run: |
-          echo "IMAGE_NAME_LC=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
-
-      - name: Login to GitHub Container Registry
-        run: |
-          echo "${{ github.token }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
-
       - name: Build Docker image
         run: |
           docker build \
             -f docker/Dockerfile \
-            -t "$REGISTRY/$IMAGE_NAME_LC:latest" \
-            -t "$REGISTRY/$IMAGE_NAME_LC:${{ github.sha }}" \
+            -t "$IMAGE_NAME:${{ github.sha }}" \
             .
 
-      - name: Push Docker image
+      - name: Run container and check application
         run: |
-          docker push "$REGISTRY/$IMAGE_NAME_LC:latest"
-          docker push "$REGISTRY/$IMAGE_NAME_LC:${{ github.sha }}"
+          docker rm -f devops-lab-ci-test 2>/dev/null || true
+
+          docker run -d \
+            --name devops-lab-ci-test \
+            -p 8000:8000 \
+            "$IMAGE_NAME:${{ github.sha }}"
+
+          echo "Waiting for test container to become ready..."
+
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8000/; then
+              echo "Test container is ready"
+              break
+            fi
+
+            echo "Test container is not ready yet. Attempt $i/30"
+            sleep 2
+
+            if [ "$i" -eq 30 ]; then
+              echo "Test container did not become ready in time"
+              docker logs devops-lab-ci-test --tail 100
+              docker rm -f devops-lab-ci-test
+              exit 1
+            fi
+          done
+
+          echo "Checking endpoints..."
+          curl -fsS http://localhost:8000/
+          curl -fsS -X POST http://localhost:8000/tasks
+          curl -fsS http://localhost:8000/tasks
+          curl -fsS -X POST http://localhost:8000/tasks/0/process
+          curl -fsS http://localhost:8000/metrics | head
+
+          docker rm -f devops-lab-ci-test
 
       - name: Prepare SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.SERVER_SSH_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key 
           chmod 600 ~/.ssh/deploy_key
+          ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null
           ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
 
       - name: Deploy to server
@@ -62,21 +87,17 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST" << EOF
             set -e
 
-            cd $DEPLOY_PATH
+            cd "$DEPLOY_PATH"
 
             git fetch origin
-            git reset --hard origin/${{ github.ref_name }}
+            git checkout ${{ github.ref_name }}
+            git pull --ff-only origin ${{ github.ref_name }}
 
-            echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            docker compose -f docker/docker-compose.yml up -d --build
 
-            export APP_IMAGE="$REGISTRY/$IMAGE_NAME_LC:latest"
+            docker compose -f docker/docker-compose.yml ps
 
-            docker compose -f docker/docker-compose.prod.yml pull
-            docker compose -f docker/docker-compose.prod.yml up -d
-
-            docker compose -f docker/docker-compose.prod.yml ps
-
-            echo "Waiting for application to become ready..."
+            echo "Waiting for deployed application to become ready..."
 
             for i in {1..30}; do
               if curl -fsS http://localhost:8000/; then
