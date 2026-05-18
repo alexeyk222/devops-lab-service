@@ -1,0 +1,81 @@
+name: CI/CD Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  DEPLOY_HOST: 109.202.59.96
+  DEPLOY_USER: alexware
+  DEPLOY_PORT: 456
+  DEPLOY_PATH: ~/workspace/os-labs/lab4/devops-lab-service
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare image name
+        run: |
+          echo "IMAGE_NAME_LC=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Login to GitHub Container Registry
+        run: |
+          echo "${{ github.token }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -f docker/Dockerfile \
+            -t "$REGISTRY/$IMAGE_NAME_LC:latest" \
+            -t "$REGISTRY/$IMAGE_NAME_LC:${{ github.sha }}" \
+            .
+
+      - name: Push Docker image
+        run: |
+          docker push "$REGISTRY/$IMAGE_NAME_LC:latest"
+          docker push "$REGISTRY/$IMAGE_NAME_LC:${{ github.sha }}"
+
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy to server
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" << EOF
+            set -e
+
+            cd $DEPLOY_PATH
+
+            git fetch origin
+            git reset --hard origin/${{ github.ref_name }}
+
+            echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+            export APP_IMAGE="$REGISTRY/$IMAGE_NAME_LC:latest"
+
+            docker compose -f docker/docker-compose.prod.yml pull
+            docker compose -f docker/docker-compose.prod.yml up -d
+
+            docker compose -f docker/docker-compose.prod.yml ps
+
+            curl -f http://localhost:8000/
+            curl -f http://localhost:8000/metrics | head
+            curl -f http://localhost:9090/-/ready
+
+            docker image prune -f
+          EOF
