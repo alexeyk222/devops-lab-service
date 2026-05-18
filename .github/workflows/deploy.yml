@@ -73,9 +73,28 @@ jobs:
 
             docker compose -f docker/docker-compose.prod.yml ps
 
-            curl -f http://localhost:8000/
-            curl -f http://localhost:8000/metrics | head
-            curl -f http://localhost:9090/-/ready
+            echo "Waiting for application to become ready..."
 
+            for i in $(seq 1 30); do
+              if curl -fsS http://localhost:8000/; then
+                echo "Application is ready"
+                break
+              fi
+
+              echo "Application is not ready yet. Attempt $i/30"
+              sleep 2
+
+              if [ "$i" -eq 30 ]; then
+                echo "Application did not become ready in time"
+                docker logs devops-lab-app --tail 100
+                exit 1
+              fi
+            done
+
+            echo "Checking metrics endpoint..."
+            curl -fsS http://localhost:8000/metrics | head
+
+            echo "Checking Prometheus..."
+            curl -fsS http://localhost:9090/-/ready
             docker image prune -f
           EOF
