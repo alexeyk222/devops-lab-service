@@ -56,7 +56,10 @@ jobs:
 
       - name: Deploy to server
         run: |
-          ssh -i ~/.ssh/deploy_key -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" << EOF
+          ssh -i ~/.ssh/deploy_key \
+            -o IdentitiesOnly=yes \
+            -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" << EOF
             set -e
 
             cd $DEPLOY_PATH
@@ -75,16 +78,16 @@ jobs:
 
             echo "Waiting for application to become ready..."
 
-            for i in $(seq 1 30); do
+            for i in {1..30}; do
               if curl -fsS http://localhost:8000/; then
                 echo "Application is ready"
                 break
               fi
 
-              echo "Application is not ready yet. Attempt $i/30"
+              echo "Application is not ready yet. Attempt \$i/30"
               sleep 2
 
-              if [ "$i" -eq 30 ]; then
+              if [ "\$i" -eq 30 ]; then
                 echo "Application did not become ready in time"
                 docker logs devops-lab-app --tail 100
                 exit 1
@@ -96,5 +99,6 @@ jobs:
 
             echo "Checking Prometheus..."
             curl -fsS http://localhost:9090/-/ready
+
             docker image prune -f
           EOF
